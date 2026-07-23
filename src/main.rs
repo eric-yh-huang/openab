@@ -136,6 +136,8 @@ fn has_unified_platform(cfg: &config::Config) -> bool {
                 .unwrap_or_default()
                 .resolve()
                 .enabled)
+        || (cfg!(feature = "ptc-isms")
+            && std::env::var("PTC_ISMS_BRIDGE_SECRET").is_ok())
 }
 
 /// Returns true when the first-class `[wecom]` section resolves all credentials
@@ -360,6 +362,7 @@ async fn main() -> anyhow::Result<()> {
         feature = "googlechat",
         feature = "wecom",
         feature = "teams",
+        feature = "ptc-isms",
     ))]
     let unified_platform_enabled = has_unified_platform(&cfg);
 
@@ -1101,6 +1104,15 @@ async fn main() -> anyhow::Result<()> {
                 app = app.route(
                     &gw_state.teams_webhook_path,
                     axum::routing::post(openab_gateway::adapters::teams::webhook),
+                );
+            }
+
+            #[cfg(feature = "ptc-isms")]
+            if let Some(ref config) = gw_state.ptc_isms {
+                info!(path = %config.webhook_path, "unified: ptc-isms bridge enabled");
+                app = app.route(
+                    &config.webhook_path,
+                    axum::routing::post(openab_gateway::adapters::ptc_isms::webhook),
                 );
             }
 

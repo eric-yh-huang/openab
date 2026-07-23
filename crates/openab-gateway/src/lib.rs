@@ -49,6 +49,10 @@ pub struct AppState {
     /// via `apply_teams_config`, default `/webhook/teams`).
     pub teams_webhook_path: String,
     pub teams_service_urls: Mutex<HashMap<String, (String, Instant)>>,
+    #[cfg(feature = "ptc-isms")]
+    pub ptc_isms: Option<adapters::ptc_isms::PtcIsmsConfig>,
+    #[cfg(feature = "ptc-isms")]
+    pub ptc_isms_pending: adapters::ptc_isms::PendingResponses,
     #[cfg(feature = "feishu")]
     pub feishu: Option<adapters::feishu::FeishuAdapter>,
     #[cfg(feature = "googlechat")]
@@ -90,6 +94,10 @@ impl AppState {
             teams: None,
             teams_webhook_path: "/webhook/teams".into(),
             teams_service_urls: Mutex::new(HashMap::new()),
+            #[cfg(feature = "ptc-isms")]
+            ptc_isms: None,
+            #[cfg(feature = "ptc-isms")]
+            ptc_isms_pending: adapters::ptc_isms::new_pending_responses(),
             #[cfg(feature = "feishu")]
             feishu: None,
             #[cfg(feature = "googlechat")]
@@ -138,6 +146,11 @@ impl AppState {
         });
         let teams_webhook_path =
             std::env::var("TEAMS_WEBHOOK_PATH").unwrap_or_else(|_| "/webhook/teams".into());
+        #[cfg(feature = "ptc-isms")]
+        let ptc_isms = adapters::ptc_isms::PtcIsmsConfig::from_env().map(|config| {
+            info!("ptc-isms bridge configured");
+            config
+        });
 
         // Feishu
         #[cfg(feature = "feishu")]
@@ -187,6 +200,10 @@ impl AppState {
             teams,
             teams_webhook_path,
             teams_service_urls: Mutex::new(HashMap::new()),
+            #[cfg(feature = "ptc-isms")]
+            ptc_isms,
+            #[cfg(feature = "ptc-isms")]
+            ptc_isms_pending: adapters::ptc_isms::new_pending_responses(),
             #[cfg(feature = "feishu")]
             feishu,
             #[cfg(feature = "googlechat")]
@@ -564,6 +581,15 @@ pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
         app = app.route(&teams_webhook_path, post(adapters::teams::webhook));
     }
 
+    // Internal bridge for the existing PTC ISMS worker.
+    #[cfg(feature = "ptc-isms")]
+    let ptc_isms = adapters::ptc_isms::PtcIsmsConfig::from_env();
+    #[cfg(feature = "ptc-isms")]
+    if let Some(ref config) = ptc_isms {
+        info!(path = %config.webhook_path, "ptc-isms bridge registered");
+        app = app.route(&config.webhook_path, post(adapters::ptc_isms::webhook));
+    }
+
     // Feishu adapter
     #[cfg(feature = "feishu")]
     let feishu_config = adapters::feishu::FeishuConfig::from_env();
@@ -677,6 +703,10 @@ pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
         teams,
         teams_webhook_path,
         teams_service_urls: Mutex::new(HashMap::new()),
+        #[cfg(feature = "ptc-isms")]
+        ptc_isms,
+        #[cfg(feature = "ptc-isms")]
+        ptc_isms_pending: adapters::ptc_isms::new_pending_responses(),
         #[cfg(feature = "feishu")]
         feishu,
         #[cfg(feature = "googlechat")]
@@ -875,6 +905,14 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                                 } else {
                                     warn!("reply for teams but adapter not configured");
                                 }
+                            }
+                            #[cfg(feature = "ptc-isms")]
+                            "ptc-isms" => {
+                                adapters::ptc_isms::handle_reply(
+                                    &reply,
+                                    &state_for_recv.ptc_isms_pending,
+                                )
+                                .await;
                             }
                             #[cfg(feature = "feishu")]
                             "feishu" => {
